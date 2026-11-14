@@ -81,8 +81,9 @@ recognizable columns works the same way).
   (require 'org-activity-android)   ; optional module
 #+end_src
 
-=M-x org-activity-android-import= (or =M-x org-activity-android-refresh=
-for the newest export in =Download/=) writes one table per day into
+=M-x org-activity-android-import-file= (or =M-x
+org-activity-android-refresh= for the newest export in =Download/=)
+writes one table per day into
 =org-activity/android.org=.  =M-x org-activity-android-report= shows
 the last-7-days StayFree-style top list with SVG charts generated in
 pure Elisp.  A dynamic block does the same inside any Org file:

@@ -48,3 +48,12 @@ at personally.  Items are removed once reviewed.
   tables (two commands exist).  Wait for real usage to say if a join
   is wanted.
 - No ActivityWatch-data import (aw-bucket JSON) -- only Org output.
+** DONE README fix: import command name (added 2026-11-15)
+   Lead review found the Android section citing =M-x
+   org-activity-android-import=, which does not exist.  The README
+   now names the real commands: =org-activity-android-import-file=
+   (pick a CSV/JSON) and =org-activity-android-refresh= (newest
+   export in Download/).  Found while reviewing the emacs-android
+   config swap (khaalidrafi/emacs-android 1a8f423 + 5c0a636); the
+   config comment there carries the corrected name too.  Docs-only
+   change, no code touched — CI gates not affected.
