@@ -71,31 +71,45 @@ API; there the module degrades honestly to Emacs-side tracking.
 
 * Android: device-wide screen time
 
-Android sandboxes apps away from each other: no stock Emacs build
-can read =UsageStatsManager=, so device-wide per-app usage needs one
-export step from an app that holds "Usage access" (StayFree's
-Settings > Backup > Export CSV works today; any CSV/JSON export with
-recognizable columns works the same way).
+Device-wide per-app usage, read NATIVELY — the complete StayFree /
+ActivityWatch question answered inside Emacs:
+
+- *Native (no export step, no third-party app)*: the stock
+  =org.gnu.emacs= app already declares
+  =android.permission.PACKAGE_USAGE_STATS= in its manifest; it just
+  ships no code that queries it.  The org-activity patch series
+  (see =NATIVE-USAGE.org=) adds the =android-usage-stats= primitive
+  to the Emacs Android port.  On the patched app: grant Emacs
+  "Usage access" in Android Settings, then =M-x
+  org-activity-android-refresh= reads the last
+  =org-activity-android-native-days= days straight from the system.
+- *Fallback (stock Emacs builds)*: any app holding "Usage access"
+  can export a CSV/JSON (StayFree's Settings > Backup > Export CSV
+  works; any export with recognizable columns works the same way).
 
 #+begin_src emacs-lisp
   (require 'org-activity-android)   ; optional module
 #+end_src
 
-=M-x org-activity-android-import-file= (or =M-x
-org-activity-android-refresh= for the newest export in =Download/=)
-writes one table per day into
-=org-activity/android.org=.  =M-x org-activity-android-report= shows
-the last-7-days StayFree-style top list with SVG charts generated in
-pure Elisp.  A dynamic block does the same inside any Org file:
+=M-x org-activity-android-refresh= pulls through
+=org-activity-android-pull-function=, whose default
+=--pull-auto= prefers the native query and falls back to the newest
+export in =Download/= on stock builds;
+=M-x org-activity-android-import-file= imports one specific export.
+Both write one table per day into =org-activity/android.org= — one
+journal format, two sources.  =M-x org-activity-android-report=
+shows the last-7-days StayFree-style top list with SVG charts
+generated in pure Elisp.  A dynamic block does the same inside any
+Org file:
 
 #+begin_src org
 ,#+BEGIN: org-activity-android :days 7 :top 15 :chart t
 ,#+END:
 #+end_src
 
-Day tables are rewritten idempotently: re-importing the same export
-never duplicates rows.  The engine (first section) runs on Android
-too -- it is the same pure Elisp.
+Day tables are rewritten idempotently: re-pulling or re-importing
+the same data never duplicates rows.  The engine (first section)
+runs on Android too -- it is the same pure Elisp.
 
 * Install
 

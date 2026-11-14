@@ -449,3 +449,99 @@ org.gnu.emacs,90000
        ;; label must appear in column 1, package in column 2
        (should (< (string-match "GNU Emacs" table)
                   (string-match "org\\.x" table)))))))
+
+;; ------------------------------------------------------------------------
+;; Native Usage Access (patched-Emacs primitive stubbed; stock Emacs
+;; has no android-usage-stats -- the fbind/fmakunbound dance restores
+;; the usually-void function cell afterwards)
+;; ------------------------------------------------------------------------
+
+(defun org-activity-android-test--with-usage-primitive (stub body-fn)
+  "Call BODY-FN with `android-usage-stats' fboundp'd to STUB."
+  (let ((was (fboundp 'android-usage-stats))
+        (old (and (fboundp 'android-usage-stats)
+                  (symbol-function 'android-usage-stats))))
+    (unwind-protect
+        (progn (defalias 'android-usage-stats stub)
+               (funcall body-fn))
+      (if was
+          (defalias 'android-usage-stats old)
+        (fmakunbound 'android-usage-stats)))))
+
+(ert-deftest org-activity-android--native-p-needs-primitive-and-android ()
+  ;; stock sandbox: neither the android feature nor the primitive
+  (should-not (org-activity-android-usage-native-p))
+  (org-activity-android-test--with-usage-primitive
+   (lambda (&rest _) nil)
+   (lambda ()
+     ;; primitive alone is not enough off-Android
+     (should-not (org-activity-android-usage-native-p))
+     (cl-letf (((symbol-function #'org-activity-android--on-android-p)
+                (lambda () t)))
+       (should (org-activity-android-usage-native-p))))))
+
+(ert-deftest org-activity-android--native-day-rows-shape ()
+  (let (windows)
+    (org-activity-android-test--with-usage-primitive
+     (lambda (beg end)
+       (push (cons beg end) windows)
+       '(("org.emacs" "Emacs" 1762300000000 3600000)
+         ("org.silent" nil 1762300000000 1800000)
+         ("org.zero" "Zero" 1762300000000 0)))
+     (lambda ()
+       (let ((rows (org-activity-android--native-day-rows "2026-11-05")))
+         (should (= (length rows) 2))
+         (should (equal (plist-get (nth 0 rows) :day) "2026-11-05"))
+         (should (equal (plist-get (nth 0 rows) :package) "org.emacs"))
+         (should (equal (plist-get (nth 0 rows) :label) "Emacs"))
+         (should (= (plist-get (nth 0 rows) :seconds) 3600))
+         (should (= (plist-get (nth 0 rows) :opens) 0))
+         ;; nil label falls back to the package; fg=0 row dropped
+         (should (equal (plist-get (nth 1 rows) :package) "org.silent"))
+         (should (equal (plist-get (nth 1 rows) :label) "org.silent"))
+         (should (= (plist-get (nth 1 rows) :seconds) 1800))
+         ;; exactly one query, window = local midnight + 24h
+         (should (= (length windows) 1))
+         (should (= (- (cdar windows) (caar windows)) 86400000))
+         (should (= (caar windows)
+                    (round (float-time (encode-time 0 0 0 5 11 2026))))))))))
+
+(ert-deftest org-activity-android--pull-auto-prefers-native ()
+  (org-activity-android-test--with-journal
+   (let ((file-pulls 0))
+     (org-activity-android-test--with-usage-primitive
+      (lambda (&rest _) '(("org.emacs" "Emacs" 1762300000000 600000)))
+      (lambda ()
+        (cl-letf (((symbol-function #'org-activity-android--on-android-p)
+                   (lambda () t))
+                  ((symbol-function #'org-activity-android--pull-latest-file)
+                   (lambda () (cl-incf file-pulls) nil)))
+          (let* ((org-activity-android-native-days 1)
+                 (days (org-activity-android--pull-auto)))
+            (should (= file-pulls 0))
+            (should (equal days (list (org-activity-android--day-string))))
+            ;; journal holds the native day table, fmt-dur style
+            (with-temp-buffer
+              (insert-file-contents org-activity-android-org-file)
+              (goto-char (point-min))
+              (should (search-forward "| Emacs | org.emacs | 0:10 | 0 |"
+                                      nil t)))
+            ;; re-pull is idempotent: the day heading is not duplicated
+            (org-activity-android--pull-auto)
+            (with-temp-buffer
+              (insert-file-contents org-activity-android-org-file)
+              (goto-char (point-min))
+              (should (= 1 (how-many
+                            (concat "^\\* "
+                                    (regexp-quote
+                                     (org-activity-android--day-string))
+                                    "\\(?: \\|$\\)"))))))))))))
+
+(ert-deftest org-activity-android--pull-auto-falls-back-to-files ()
+  (org-activity-android-test--with-journal
+   (let ((file-pulls 0))
+     (cl-letf (((symbol-function #'org-activity-android--pull-latest-file)
+                (lambda () (cl-incf file-pulls) '("fallback-day"))))
+       ;; stock sandbox: no primitive, not on android
+       (should (equal (org-activity-android--pull-auto) '("fallback-day")))
+       (should (= file-pulls 1))))))

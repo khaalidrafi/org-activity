@@ -59,6 +59,13 @@
 (declare-function org-dynamic-block-insert-dblock
                   "org" (type &optional interactive))
 
+;; Patched-Emacs Android primitive (org-activity patch series, see
+;; NATIVE-USAGE.org); "ext:" because it lives outside this repo.
+;; Stock org.gnu.emacs declares android.permission.PACKAGE_USAGE_STATS
+;; in its manifest but ships no code querying UsageStatsManager --
+;; every call is guarded by `org-activity-android-usage-native-p'.
+(declare-function android-usage-stats "ext:android" (begin-ms end-ms))
+
 (defgroup org-activity-android nil
   "Android Usage Access screen-time data in Org."
   :prefix "org-activity-android-"
@@ -111,12 +118,23 @@ columns are detected from the CSV header row."
   :type 'integer
   :group 'org-activity-android)
 
-(defcustom org-activity-android-pull-function #'org-activity-android--pull-latest-file
+(defcustom org-activity-android-pull-function #'org-activity-android--pull-auto
   "Function that pulls new usage data into the journal.
-Default scans `org-activity-android-import-dir' for the newest usable
-export.  Replace it (or advise it) to integrate any exporter --
-the function must write day snapshots via `org-activity-android--write-day'."
+Default `org-activity-android--pull-auto' goes NATIVE first: when this
+Emacs can query Usage Access directly (the patched org.gnu.emacs app:
+`android-usage-stats' fboundp), the last
+`org-activity-android-native-days' days are read from the system --
+no export step, no third-party app.  Otherwise it falls back to the
+newest usable export in `org-activity-android-import-dir'.  Replace
+it (or advise it) to integrate any exporter -- the function must
+write day snapshots via `org-activity-android--write-day'."
   :type 'function
+  :group 'org-activity-android)
+
+(defcustom org-activity-android-native-days 7
+  "Days the native Usage Access puller queries per refresh.
+Used by `org-activity-android--pull-native' (patched Emacs only)."
+  :type 'integer
   :group 'org-activity-android)
 
 (defcustom org-activity-android-lighter " AU"
@@ -930,6 +948,15 @@ PARAMS: :date (default: last day with data), :top (default 10),
         (org-activity-android-parse text file))
     (error nil)))
 
+(defun org-activity-android--write-rows (rows)
+  "Write one journal day table per day in ROWS; return the day list."
+  (let ((days (mapcar (lambda (d) (car d)) (org-activity-android--aggregate rows))))
+    (dolist (day days)
+      (org-activity-android--write-day
+       day (cl-remove-if-not
+            (lambda (r) (equal (plist-get r :day) day)) rows)))
+    (sort days #'string<)))
+
 (defun org-activity-android-import-file (file)
   "Import the usage export FILE into the journal.
 Returns the list of day strings written."
@@ -940,16 +967,11 @@ Returns the list of day strings written."
   (let ((rows (org-activity-android--import-file-rows file)))
     (unless rows
       (user-error "org-activity-android: no usage rows found in %s" file))
-    (let ((days (mapcar (lambda (d) (car d)) (org-activity-android--aggregate rows))))
-      (dolist (day days)
-        (let ((day-rows (cl-remove-if-not
-                         (lambda (r) (equal (plist-get r :day) day))
-                         rows)))
-          (org-activity-android--write-day day day-rows)))
+    (let ((days (org-activity-android--write-rows rows)))
       (message "org-activity-android: imported %s (%d rows, days: %s)"
                (file-name-nondirectory file) (length rows)
-               (mapconcat #'identity (sort days #'string<) ", "))
-      (sort days #'string<))))
+               (mapconcat #'identity days ", "))
+      days)))
 
 (defun org-activity-android--pull-latest-file ()
   "Default puller: import the newest usable export in the import dir."
@@ -997,6 +1019,77 @@ Returns the list of day strings written."
                (eq 'org-mode (buffer-local-value 'major-mode buffer)))
       (with-current-buffer buffer
         (org-update-all-dblocks)))))
+
+;;; ------------------------------------------------------------------------
+;;; Native Usage Access (patched Emacs app — no export step)
+;;; ------------------------------------------------------------------------
+
+(defun org-activity-android--on-android-p ()
+  "Non-nil when running inside the Emacs Android port."
+  (featurep 'android))
+
+(defun org-activity-android-usage-native-p ()
+  "Non-nil when THIS Emacs can query Usage Access directly.
+True only on the patched org.gnu.emacs app (built with the
+org-activity patch series, NATIVE-USAGE.org): the primitive
+`android-usage-stats' is defined.  Stock Emacs Android declares
+android.permission.PACKAGE_USAGE_STATS in its manifest but ships
+no code that queries UsageStatsManager, and has no generic Java
+interop — there the export-file path is the fallback."
+  (and (org-activity-android--on-android-p)
+       (fboundp 'android-usage-stats)))
+
+(defun org-activity-android--day-begin-ms (day)
+  "Epoch milliseconds at DAY's (\"YYYY-MM-DD\") local midnight."
+  (pcase-let ((`(,y ,m ,d)
+               (mapcar #'string-to-number (split-string day "-"))))
+    (round (float-time (encode-time 0 0 0 d m y)))))
+
+(defun org-activity-android--native-day-rows (day)
+  "Query one DAY natively; return rows in the importer's shape.
+Calls the patched-Emacs primitive
+  (android-usage-stats BEGIN-MS END-MS)
+over the day's window.  Each (PACKAGE LABEL LAST-USED-MS
+FOREGROUND-MS) entry with FOREGROUND-MS > 0 becomes one plist row
+(:day :package :label :seconds :opens); FOREGROUND-MS becomes
+seconds and LABEL falls back to PACKAGE when nil.  Opens are 0:
+UsageStats carries no open count (an events-based count is a
+later unit — NATIVE-USAGE.org)."
+  (let ((stats (android-usage-stats
+                (org-activity-android--day-begin-ms day)
+                (+ (org-activity-android--day-begin-ms day) 86400000)))
+        (rows nil))
+    (dolist (entry (nreverse stats) rows)
+      (let ((pkg (nth 0 entry)) (label (nth 1 entry))
+            (fg-ms (nth 3 entry)))
+        (when (and pkg (> fg-ms 0))
+          (push (list :day day :package pkg
+                      :label (or label pkg)
+                      :seconds (/ fg-ms 1000.0)
+                      :opens 0)
+                rows))))))
+
+(defun org-activity-android--pull-native ()
+  "Pull the last `org-activity-android-native-days' days natively.
+The whole-device StayFree question answered without StayFree:
+Usage Access read straight from the system by the patched Emacs
+app.  Returns the day list written, or nil when the query yields
+nothing."
+  (let ((rows nil))
+    (dotimes (i org-activity-android-native-days)
+      (let ((day (org-activity-android--day-string
+                  (time-subtract nil (* i 86400)))))
+        (setq rows (append rows (org-activity-android--native-day-rows day)))))
+    (if rows
+        (org-activity-android--write-rows rows)
+      (message "org-activity-android: native query returned no rows")
+      nil)))
+
+(defun org-activity-android--pull-auto ()
+  "Native Usage Access when available; export files otherwise."
+  (if (org-activity-android-usage-native-p)
+      (org-activity-android--pull-native)
+    (org-activity-android--pull-latest-file)))
 
 ;;; ------------------------------------------------------------------------
 ;;; Mode and report

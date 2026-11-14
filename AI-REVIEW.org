@@ -57,3 +57,39 @@ at personally.  Items are removed once reviewed.
    config swap (khaalidrafi/emacs-android 1a8f423 + 5c0a636); the
    config comment there carries the corrected name too.  Docs-only
    change, no code touched — CI gates not affected.
+** DONE native Usage Access — Elisp side + patch spec (added 2026-11-15)
+   Owner order: org-activity must be a COMPLETE ActivityWatch
+   replacement — device-wide screen time native, no StayFree
+   dependency.  Senior EL seat unit.
+   Research (recorded in NATIVE-USAGE.org): stock org.gnu.emacs
+   ALREADY declares android.permission.PACKAGE_USAGE_STATS (+
+   QUERY_ALL_PACKAGES, MANAGE_EXTERNAL_STORAGE) in its manifest —
+   but ZERO code queries UsageStatsManager, and the port has no
+   generic Java interop.  The missing piece is a patch series, not
+   a redesign.
+   Landed (this commit):
+   - org-activity-android.el: `usage-native-p' (featurep android +
+     fboundp android-usage-stats), `--native-day-rows' (one day
+     window, epoch ms; label falls back to package; fg=0 dropped;
+     opens=0 honestly documented), `--pull-native' (last
+     org-activity-android-native-days days), `--pull-auto' — the
+     NEW default of `org-activity-android-pull-function': native
+     first, export files as stock-build fallback (a fallback, not a
+     dependency).  import-file refactored onto a shared
+     `--write-rows' so both sources write the SAME idempotent day
+     tables.
+   - NATIVE-USAGE.org: the patch-series spec — android-usage-stats
+     primitive (JNI pattern per the port's existing static-call
+     style), android-start-activity (eservo dependency, same
+     series), android-usage-events (later, for real opens counts),
+     fork + patches/ + CI APK build lane, honest limits.
+   - Four new offline ERT tests (primitive stubbed with the
+     fbind/fmakunbound dance): native-p gating, day-rows shape +
+     exact midnight/24h window, pull-auto preferring native (day
+     table content + idempotent re-pull), pull-auto fallback.
+   GATES: no emacs binary in this sandbox — CI on GitHub is the
+   gate (byte-compile warnings-as-errors + ERT).  Reviewer pass
+   (author≠reviewer) queued for the Ring-2.6 seat.
+   NEXT UNIT (Owner decision): build the emacs fork patch series +
+   APK in CI per NATIVE-USAGE.org; then grant Usage Access on the
+   phone and verify the first native pull.

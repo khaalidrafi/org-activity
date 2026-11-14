@@ -1,0 +1,111 @@
+#+title: NATIVE-USAGE.org — reading Android Usage Access natively from Emacs
+#+author: GLM 5.3 (Senior Emacs Lisp Engineer seat)
+
+* The finding (2026-11-15, verified against upstream)
+
+The Owner's directive: org-activity must be a COMPLETE ActivityWatch
+replacement — device-wide screen time read natively, no StayFree, no
+export step.  Research against Emacs upstream (master) and the
+installed app shows:
+
+1. The stock =org.gnu.emacs= app ALREADY DECLARES
+   =android.permission.PACKAGE_USAGE_STATS= (plus =QUERY_ALL_PACKAGES=
+   and =MANAGE_EXTERNAL_STORAGE=) in its manifest — verified in the
+   F-Droid permission listing and =java/AndroidManifest.xml.in=.
+   Usage Access is a "special app access" grant: the user enables it
+   per-app in Settings; no Play-style runtime dialog exists.  So the
+   app CAN legally hold the permission the day we query it.
+2. NO code in Emacs queries it: a source search for
+   =UsageStatsManager= / =PACKAGE_USAGE_STATS= outside the manifest
+   returns zero hits.  The permission is declared but unused.
+3. There is NO generic Java interop from Elisp (no
+   =android-call-method=, no =android-start-activity=) — the port
+   exposes only fixed primitives.
+
+Conclusion: the missing piece is a small Emacs-side patch series —
+new primitives in the port's own JNI style.  No fork of org-activity
+logic, no companion app, no Termux.
+
+* The patch series (emacs fork, patches/ dir)
+
+Fork =khaalidrafi/emacs= tracks upstream =master= (feature/android
+port) and carries =patches/org-activity/*.patch=; CI builds the APK
+from =java/INSTALL= instructions (NDK r25c, platform 33 — same tooling
+our lineageos-mi439 lane already uses).  The series adds:
+
+** 1. =android-usage-stats= (THIS unit's dependency)
+
+#+begin_src emacs-lisp
+(android-usage-stats BEGIN-MS END-MS)
+=> ((PACKAGE LABEL LAST-USED-MS FOREGROUND-MS) ...)
+#+end_src
+
+- C side (src/android.c): one =DEFUN= + =defsubr= following the
+  existing static-call pattern the port uses for
+  =android-notifications-*= style primitives.
+- Java side (org.gnu.emacs, service context):
+  =UsageStatsManager.queryUsageStats(BEST, begin, end)= → for each
+  =UsageStats=: package name, application label via
+  =PackageManager.getApplicationLabel= (QUERY_ALL_PACKAGES is already
+  declared), =getLastTimeUsed=, =getTotalTimeInForeground= (ms).
+- Returns a Lisp list of 4-element lists; BEGIN/END are integer
+  epoch milliseconds (Java's native unit — no conversion loss).
+- When Usage Access is not granted the Java side returns an EMPTY
+  list and the primitive also returns the grant state so Elisp can
+  point the user at Settings → Usage Access.  (Refinement: return
+  =(granted . data)=; org-activity only consumes the data.)
+
+** 2. =android-start-activity= (eservo's dependency, same series)
+
+#+begin_src emacs-lisp
+(android-start-activity "org.servo.servoshell/.MainActivity"
+                        '(("servoargs" . "--devtools=6080")))
+#+end_src
+
+Starts an activity by component name with string intent extras.
+This is what lets eservo launch the servo app with its devtools
+server on — no adb, no PC (see eservo's Android lane,
+khaalidrafi/eservo a70a5b3).
+
+** 3. =android-usage-events= (later unit)
+
+=UsageStatsManager.queryEvents= → =(MOVE_TO_FOREGROUND /
+ACTIVITY_RESUMED / ACTIVITY_PAUSED ...)= stream, enabling true
+"opens" counts and session boundaries for the journal.  Not needed
+for v1 of the native pull (opens stay 0, documented honestly).
+
+* Consumption contract (landed in org-activity-android.el)
+
+- =(org-activity-android-usage-native-p)= — =featurep 'android= AND
+  =fboundp 'android-usage-stats=.
+- =org-activity-android--native-day-rows= maps one day's window
+  (local midnight + 24 h, epoch ms) to the importer's row shape
+  (:day :package :label :seconds :opens); label falls back to the
+  package; fg=0 rows are dropped; FOREGROUND-MS → seconds.
+- =org-activity-android--pull-native= queries the last
+  =org-activity-android-native-days= days (default 7) and writes the
+  SAME idempotent day tables the CSV importer writes — one journal
+  format, two sources.
+- =org-activity-android-pull-function='s new default
+  =--pull-auto= prefers native, falls back to export files on stock
+  builds.  The export path is a fallback, not a dependency.
+
+* Honest limits
+
+- "Opens" are 0 from the native source until =android-usage-events=
+  lands (StayFree's opens column only fills from imports).
+- One system query per day window per refresh (7 queries/refresh at
+  the default) — cheap, but not an event stream.
+- The patched APK must be installed instead of the F-Droid build
+  (same signature family: our own keystore, so it installs
+  side-by-side as =org.gnu.emacs= only after uninstall OR with a
+  distinct applicationId if we want both — decision for the Owner
+  at build time).
+- CI builds the APK; on-device verification needs the Owner's phone
+  (grant Usage Access, run =M-x org-activity-android-refresh=).
+
+* Status
+
+- Elisp side + tests: landed (see AI-REVIEW.org).
+- Patch series + fork + CI build: NOT started — awaiting Owner
+  review of this design.
