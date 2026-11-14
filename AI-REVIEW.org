@@ -1,0 +1,50 @@
+#+title: AI-REVIEW.org — owner review notes for org-activity
+
+This file records what the owner (or a reviewing agent) should look
+at personally.  Items are removed once reviewed.
+
+* For the next review pass
+
+** PROVENANCE — code continued from two superseded repos
+- Engine (org-activity.el): continued from actlog@ai/main, commit
+  range e6e2bd5..HEAD at port time.  Mechanical rename
+  actlog->org-activity PLUS two real changes: (1) new public seam
+  `org-activity-source-function' with `org-activity-emacs-source'
+  (was the internal `actlog--activity-key'); (2) unified commentary
+  telling the three-module story.  No accounting-logic edits.
+- Android module (org-activity-android.el): continued from
+  android-usage.el@ai/main d859152.  Mechanical rename
+  android-usage->org-activity-android PLUS: default journal moved to
+  org-directory/org-activity/android.org, header rewritten, Version
+  1.0.  No parser edits.
+- Review hint: `git log --follow` in the old repos is the history;
+  diff the port against the old files to see only renames + the
+  documented deltas.
+
+** DESIGN DECISIONS to sanity-check
+- The Linux source journals one row per app *class*
+  ("System:firefox"), with the window title as the entry's :MODE:
+  (first title of the day wins).  Alternative: row per title.  Chose
+  class: titles churn, StayFree/ActivityWatch group by app.
+- The Linux source DEGRADES to Emacs-only tracking when no detector
+  answers (plain Wayland).  Miscrediting unfocused time to Emacs
+  buffers would be worse than undercounting.
+- Android import keeps its own journal (tables, one file) instead of
+  merging into the engine's CLOCK journal: two different data
+  shapes (clocked sessions vs daily aggregates), and the import must
+  stay idempotent-by-rewrite.
+
+** TESTING state
+- Engine + Android suites are the ported suites (22 + 39 tests) --
+  they passed in the source repos and must pass here unchanged
+  modulo renames.
+- Linux suite (7 tests) is new: stubs `org-activity-linux--run'
+  only; no X server needed.  NOT covered: a real hyprctl/xdotool
+  round-trip (no desktop in CI) -- flagged for an on-device/desktop
+  smoke check when convenient.
+
+** NOT DONE on purpose (v1.0 scope)
+- No unified "everything" report joining CLOCK journal + Android
+  tables (two commands exist).  Wait for real usage to say if a join
+  is wanted.
+- No ActivityWatch-data import (aw-bucket JSON) -- only Org output.
