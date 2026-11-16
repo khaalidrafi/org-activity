@@ -17,6 +17,20 @@ and no network.  Three modules, one story:
 | =org-activity-android.el=  | device-wide per-app screen time from      | Android        |
 |                            | Android's Usage Access data                |                |
 
+* Supersedes two earlier packages
+
+=org-activity= now owns both halves of the earlier split:
+
+- =khaalidrafi/actlog= — the per-buffer engine into Org CLOCK data. That is
+  =org-activity.el= here, same 32-function design.
+- =khaalidrafi/android-usage.el= — StayFree CSV/JSON import, per-day tables
+  and the dynamic block. That is =org-activity-android.el= here (a superset:
+  it also writes the day dblock).
+
+Both repositories are frozen and carry a DEPRECATED banner. Fixes and
+features belong here.
+
+
 * The engine (everywhere)
 
 =M-x org-activity-mode= samples the current activity every 15 s and
