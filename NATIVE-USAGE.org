@@ -131,11 +131,20 @@ for v1 of the native pull (opens stay 0, documented honestly).
   Elisp consumer: org-activity-android.el's bridge section
   (--bridge-endpoint/--bridge-request/--pull-bridge), preferred by
   --pull-auto over the primitive and the export files.
-- The Emacs-fork patch series below stays as the documented
-  ALTERNATIVE for stock org.gnu.emacs users who cannot run emacshell;
-  it is no longer the primary path.  android-usage-events (item 3)
-  is effectively superseded by the bridge's EVENTS command.
-- On-device verification needs the Owner's phone (build emacshell,
+- RETIRED 2026-11-23 (Owner order: "You should try avoiding to patch
+  as much as possible, and use EL as much as possible"): the
+  Emacs-fork patch series below is retired as a development lane.
+  No fork was ever created (no khaalidrafi/emacs repository exists);
+  the generators survive in the session sandbox as archaeology only.
+  The bridge answers usage-stats/events as app code with no Emacs
+  rebuild, and activity launching goes through =termux-am= from
+  Elisp (the =emacshell-open-terminal= pattern).  The series below
+  stays for the record: it documents what WOULD be needed on a stock
+  org.gnu.emacs build, and nothing in org-activity depends on it —
+  =android-usage-stats= remains an optional primitive the bridge
+  outranks in =--pull-auto=.  android-usage-events (item 3) is
+  superseded by the bridge's EVENTS command.
+- On-device verification needs the Owner's phone (install emacshell,
   grant Usage access, run =M-x org-activity-android-refresh=).
 
 * The original finding (2026-11-15, kept for the record)
