@@ -155,8 +155,8 @@ counts under NAME in the report's category rollup.  Keys matching
 nothing fall under \='Other\='.  ActivityWatch-style rule categories
 applied to Org data at report time -- the journal is never rewritten.
 Example:
-  (("Comms" . ("telega\\|Emacs:Telega"))
-   ("Code" . ("-org$" "Files:src")))"
+  ((\"Comms\" . (\"telega\\|Emacs:Telega\"))
+   (\"Code\" . (\"-org$\" \"Files:src\")))"
   :type '(repeat (cons string (repeat regexp)))
   :group 'org-activity)
 
@@ -165,7 +165,7 @@ Example:
 StayFree-style limits, informing instead of blocking: when a key's
 day total passes its limit, `org-activity-report' says so and the
 post-flush check messages it.  The engine never blocks anything.
-Example: (("telega\\|Emacs:Telega" . 60))"
+Example: ((\"telega\\|Emacs:Telega\" . 60))"
   :type '(repeat (cons regexp natnum))
   :group 'org-activity)
 
