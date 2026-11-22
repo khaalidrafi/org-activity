@@ -17,6 +17,26 @@ and no network.  Three modules, one story:
 | =org-activity-android.el=  | device-wide per-app screen time from      | Android        |
 |                            | Android's Usage Access data                |                |
 
+Feature parity with StayFree and ActivityWatch, honestly:
+
+| Feature                          | StayFree | ActivityWatch | org-activity                        |
+|----------------------------------+----------+---------------+-------------------------------------|
+| Per-app / per-activity time      | yes      | yes           | yes (both journals)                 |
+| Opens per app                    | yes      | —             | bridge + imports (0 on primitive)   |
+| Screen unlocks per day           | yes      | —             | bridge (API 30+; see below)         |
+| Notifications per app            | yes      | —             | bridge (API 29+; see below)         |
+| Hour-of-day timeline             | yes      | yes           | yes (both journals, pure-Elisp SVG) |
+| Week/month ranges                | yes      | yes           | yes (:days N)                       |
+| Categories + rules               | —        | yes           | yes (report-time, journal untouched)|
+| Usage limits / goals             | yes      | yes           | yes (informs, never blocks)         |
+| AFK detection                    | —        | yes           | yes (idle threshold)                |
+| Charts                           | yes      | yes           | yes (SVG, no external tools)        |
+| Export your data                 | CSV      | JSON          | Org itself + JSON export commands   |
+| App blocking / focus mode        | yes      | —             | NO (a tracker, not a blocker)       |
+| Browser-tab watching             | —        | yes           | NO (extension out of scope; Linux   |
+|                                  |          |               | window titles carry page names)     |
+| Multi-device sync                | —        | yes           | NO (Org files sync however you do)  |
+
 * Supersedes two earlier packages
 
 =org-activity= now owns both halves of the earlier split:
@@ -29,7 +49,6 @@ and no network.  Three modules, one story:
 
 Both repositories are frozen and carry a DEPRECATED banner. Fixes and
 features belong here.
-
 
 * The engine (everywhere)
 
@@ -47,6 +66,17 @@ entry per activity, one =CLOCK:= line per work session, a =:MODE:=
 property on each entry.  Because the journal is ordinary Org clock
 data, =org-clock-report=, the agenda and =org-clock-sum= all work on
 it without this package loaded.
+
+StayFree/ActivityWatch parity on top of the journal (engine):
+
+- =org-activity-categories= — ActivityWatch-style rule categories
+  (regexp → category) rolled up in =M-x org-activity-report=.
+- =org-activity-limits= — daily goals on activity keys; the report
+  warns and the post-flush check messages (never blocks).
+- =M-x org-activity-timeline= — the day's hour-of-day usage as an
+  SVG bar chart, computed from the CLOCK lines.
+- =M-x org-activity-export-json= — the day's sessions exported as
+  ActivityWatch-style event JSON (timestamp/duration/data).
 
 Honesty rules baked into the engine:
 
@@ -86,44 +116,69 @@ API; there the module degrades honestly to Emacs-side tracking.
 * Android: device-wide screen time
 
 Device-wide per-app usage, read NATIVELY — the complete StayFree /
-ActivityWatch question answered inside Emacs:
+ActivityWatch question answered inside Emacs.  Three sources, tried
+in order by =M-x org-activity-android-refresh=:
 
-- *Native (no export step, no third-party app)*: the stock
-  =org.gnu.emacs= app already declares
-  =android.permission.PACKAGE_USAGE_STATS= in its manifest; it just
-  ships no code that queries it.  The org-activity patch series
-  (see =NATIVE-USAGE.org=) adds the =android-usage-stats= primitive
-  to the Emacs Android port.  On the patched app: grant Emacs
-  "Usage access" in Android Settings, then =M-x
-  org-activity-android-refresh= reads the last
-  =org-activity-android-native-days= days straight from the system.
-- *Fallback (stock Emacs builds)*: any app holding "Usage access"
-  can export a CSV/JSON (StayFree's Settings > Backup > Export CSV
-  works; any export with recognizable columns works the same way).
+1. *The Emacshell usage bridge (preferred, full StayFree set)*: the
+   [[https://github.com/khaalidrafi/emacshell][emacshell]] app (the
+   Owner's Emacs-for-Android packaging) runs a token-gated loopback
+   server exposing UsageStatsManager: per-app screen time AND the
+   event stream, so opens, screen unlocks, notification counts and
+   the hour-of-day timeline are all real.  No export step, no
+   third-party app, no Emacs C rebuild — the bridge is app code
+   ("patch the Emacshell app if necessary" was the Owner's order).
+   Zero setup: Emacs and the app share the files dir, so the port
+   and secret files at =~/emacshell-usage-port= / =~/emacshell-usage-secret=
+   are found automatically.  Grant emacshell "Usage access" in
+   Android Settings once.
+2. *The patched-Emacs primitive* (NATIVE-USAGE.org patch series):
+   stats only; opens/unlocks/notifications read 0 on this path.
+3. *Export files* (stock builds): any app holding "Usage access" can
+   export a CSV/JSON (StayFree's Settings > Backup > Export CSV
+   works; any export with recognizable columns works the same way).
 
 #+begin_src emacs-lisp
   (require 'org-activity-android)   ; optional module
 #+end_src
 
 =M-x org-activity-android-refresh= pulls through
-=org-activity-android-pull-function=, whose default
-=--pull-auto= prefers the native query and falls back to the newest
-export in =Download/= on stock builds;
-=M-x org-activity-android-import-file= imports one specific export.
-Both write one table per day into =org-activity/android.org= — one
-journal format, two sources.  =M-x org-activity-android-report=
-shows the last-7-days StayFree-style top list with SVG charts
-generated in pure Elisp.  A dynamic block does the same inside any
-Org file:
+=org-activity-android-pull-function= (default: bridge → primitive →
+newest export); =M-x org-activity-android-import-file= imports one
+specific export.  Both write one section per day into
+=org-activity/android.org= — one journal format, three sources:
+
+#+begin_src org
+,* 2026-11-07 Sat
+Unlocks: 42
+| App      | Package      | Time | Opens | Notif |
+|----------+--------------+------+-------+-------|
+| WhatsApp | org.whatsapp | 2:15 |    31 |    20 |
+,#+name: hourly
+| Hour | Minutes |
+#+end_src
+
+Re-pulling or re-importing the same data never duplicates rows
+(idempotent rewrite); pre-Notif-column journals still parse.  =M-x
+org-activity-android-report= shows the last-7-days StayFree-style
+top list with SVG charts, plus a category rollup when
+=org-activity-android-categories= is set and warnings for exceeded
+=org-activity-android-limits= (StayFree-style goals — informing,
+never blocking; an Android notification is posted when this Emacs
+can post one).  =M-x org-activity-android-timeline= shows one day's
+hour-of-day chart; =M-x org-activity-android-export-json= exports
+the range as ActivityWatch-style event JSON.  A dynamic block does
+the table + charts inside any Org file:
 
 #+begin_src org
 ,#+BEGIN: org-activity-android :days 7 :top 15 :chart t
 ,#+END:
 #+end_src
 
-Day tables are rewritten idempotently: re-pulling or re-importing
-the same data never duplicates rows.  The engine (first section)
-runs on Android too -- it is the same pure Elisp.
+Honest limits on the bridge path: unlocks need keyguard events
+(Android 11+ / API 30; older devices fall back to screen-on counts),
+per-app notification counts need NOTIFICATION_SEEN events (Android
+10+ / API 29), and "opens" are ACTIVITY_RESUMED event counts — the
+same signals StayFree itself reads.
 
 * Install
 

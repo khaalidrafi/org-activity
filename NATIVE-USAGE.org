@@ -107,5 +107,35 @@ for v1 of the native pull (opens stay 0, documented honestly).
 * Status
 
 - Elisp side + tests: landed (see AI-REVIEW.org).
-- Patch series + fork + CI build: NOT started — awaiting Owner
-  review of this design.
+- PLAN OF RECORD (Owner order 2026-11-22: "I want org-activity to be
+  completely on par with StayFree Android app and activitywatch.
+  Patch the Emacshell app if necessary for android."): the EMACSHELL
+  USAGE BRIDGE, not the Emacs-fork patch series.  The Owner's own
+  app (khaalidrafi/emacshell) already packages GNU Emacs without
+  rebuilding it (its law: "No Emacs C rebuild, ever"), and its
+  manifest already declares PACKAGE_USAGE_STATS (inherited from the
+  termux-app manifest).  EmacshellUsageServer (app Java) binds
+  127.0.0.1, gates every request with a per-boot secret written to
+  the app's private files dir — which IS HOME for the Emacs Android
+  port, so Elisp finds ~/emacshell-usage-port and
+  ~/emacshell-usage-secret with zero configuration.  Protocol: one
+  line request "CMD SECRET BEGIN-MS END-MS", one line JSON response.
+  - =STATS= → queryAndAggregateUsageStats: per-app package, label,
+    lastUsedMs, foregroundMs (the old =android-usage-stats= shape).
+  - =EVENTS= → queryEvents, filtered server-side to ACTIVITY_RESUMED,
+    ACTIVITY_PAUSED, SCREEN_INTERACTIVE/NON_INTERACTIVE,
+    KEYGUARD_SHOWN/HIDDEN, NOTIFICATION_SEEN — giving real opens
+    counts, screen unlocks (keyguard_hidden; screen_on fallback on
+    API < 30), per-app notification counts (NOTIFICATION_SEEN, API
+    29+), and the hour-of-day timeline (resume→pause sessions).
+  Elisp consumer: org-activity-android.el's bridge section
+  (--bridge-endpoint/--bridge-request/--pull-bridge), preferred by
+  --pull-auto over the primitive and the export files.
+- The Emacs-fork patch series below stays as the documented
+  ALTERNATIVE for stock org.gnu.emacs users who cannot run emacshell;
+  it is no longer the primary path.  android-usage-events (item 3)
+  is effectively superseded by the bridge's EVENTS command.
+- On-device verification needs the Owner's phone (build emacshell,
+  grant Usage access, run =M-x org-activity-android-refresh=).
+
+* The original finding (2026-11-15, kept for the record)

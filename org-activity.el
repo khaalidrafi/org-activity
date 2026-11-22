@@ -31,6 +31,20 @@
 ;;     CSV/JSON export into its own Org journal -- the device-wide
 ;;     part no Emacs-internal sampler can reach.
 ;;
+;; StayFree/ActivityWatch parity built into the engine:
+;;
+;;   - `org-activity-categories': ActivityWatch-style rule categories
+;;     rolled up in `org-activity-report' -- the journal is never
+;;     rewritten, classification happens at report time.
+;;   - `org-activity-limits': StayFree-style daily usage goals on
+;;     activity keys; exceeded limits are reported (message only --
+;;     the engine informs, it never blocks).
+;;   - `org-activity-timeline': the day's hour-of-day usage as an SVG
+;;     chart, computed from the CLOCK lines (ActivityWatch's timeline
+;;     view; StayFree's hourly breakdown).
+;;   - `org-activity-export-json': the day's sessions exported as
+;;     ActivityWatch-style event JSON (timestamp/duration/data).
+;;
 ;; What the engine counts as an "activity" (default Emacs source):
 ;;
 ;;   - a file inside a project  ->  the project name    ("telega-org")
@@ -63,6 +77,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
 
 (declare-function project-current "project" (&optional maybe-prompt dir))
 (declare-function project-root "project" (project))
@@ -132,6 +147,29 @@ window while you work outside Emacs (ActivityWatch-style)."
   "Mode-line lighter for `org-activity-mode'."
   :type 'string
   :group 'org-activity)
+
+(defcustom org-activity-categories nil
+  "Alist (CATEGORY . REGEXPS) classifying activity keys for reports.
+Each element is (NAME . (REGEXP...)); a key matching any regexp
+counts under NAME in the report's category rollup.  Keys matching
+nothing fall under \='Other\='.  ActivityWatch-style rule categories
+applied to Org data at report time -- the journal is never rewritten.
+Example:
+  (("Comms" . ("telega\\|Emacs:Telega"))
+   ("Code" . ("-org$" "Files:src")))"
+  :type '(repeat (cons string (repeat regexp)))
+  :group 'org-activity)
+
+(defcustom org-activity-limits nil
+  "Daily usage goals as (REGEX . MINUTES) pairs on activity keys.
+StayFree-style limits, informing instead of blocking: when a key's
+day total passes its limit, `org-activity-report' says so and the
+post-flush check messages it.  The engine never blocks anything.
+Example: (("telega\\|Emacs:Telega" . 60))"
+  :type '(repeat (cons regexp natnum))
+  :group 'org-activity)
+
+(declare-function project-current "project" (&optional maybe-prompt dir))
 
 ;; ------------------------------------------------------------------------
 ;; Internal state (all plain, printable values -- the state file is
@@ -349,7 +387,8 @@ Bounds the loss a hard process kill can cause; also saves state."
     (org-activity--close-live (time-to-seconds))
     (setq org-activity--since (time-to-seconds)))
   (org-activity--save-state)
-  (org-activity--update-mode-line))
+  (org-activity--update-mode-line)
+  (org-activity--check-limits))
 
 ;; ------------------------------------------------------------------------
 ;; Org journal
@@ -473,6 +512,179 @@ property and a :LOGBOOK: drawer) on the first session of the day."
   (+ (cl-reduce #'+ (mapcar #'cdr org-activity--totals) :initial-value 0)
      org-activity--session-secs))
 
+;; ------------------------------------------------------------------------
+;; Hourly timeline (StayFree's hourly view / ActivityWatch's timeline)
+;; ------------------------------------------------------------------------
+
+(defun org-activity--parse-ts (s)
+  "Parse one side of an Org CLOCK timestamp to epoch float.
+Handles the inactive form \\='[2026-11-07 Sat 11:20]\\=' by dropping
+the weekday abbreviation (date-to-time is not guaranteed to accept
+it), and already-clean \\='YYYY-MM-DD HH:MM\\=' input unchanged."
+  (time-to-seconds
+   (date-to-time
+    (if (string-match
+         "\\`\\(20[0-9][0-9]-[01][0-9]-[0-3][0-9]\\)[ ][A-Za-z]\\{1,3\\}[ ]\\(.*\\)"
+         s)
+        (concat (match-string 1 s) " " (match-string 2 s))
+      s))))
+
+(defun org-activity--day-events (day)
+  "Return DAY's CLOCK sessions as ((KEY MODE START END)...), epoch floats."
+  (let ((file (org-activity-journal-file day))
+        (key nil) (mode nil) (out nil))
+    (when (file-exists-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-min))
+        (while (not (eobp))
+          (cond
+           ((looking-at "^\\*\\* \\(.*\\)$")
+            (setq key (match-string 1) mode nil))
+           ((and key (looking-at "^:MODE: \\(.*\\)$"))
+            (setq mode (match-string 1)))
+           ((and key (looking-at "^CLOCK: \\[\\([^]]+\\)\\]--\\[\\([^]]+\\)\\]"))
+            (push (list key mode
+                        (org-activity--parse-ts (match-string 1))
+                        (org-activity--parse-ts (match-string 2)))
+                  out)))
+          (forward-line 1))))
+    (nreverse out)))
+
+(defun org-activity--hourly-from-events (events)
+  "Bucket EVENTS ((KEY MODE START END)...) into 24 per-hour seconds."
+  (let ((hours (make-vector 24 0.0)))
+    (pcase-dolist (`(_ _ ,start ,end) events)
+      (let ((cursor (floor start)))
+        (while (< cursor end)
+          (let* ((decoded (decode-time (seconds-to-time cursor)))
+                 (hour (nth 2 decoded))
+                 (next (min end
+                            (float-time
+                             (encode-time 0 0 (1+ hour)
+                                          (nth 3 decoded) (nth 4 decoded)
+                                          (nth 5 decoded))))))
+            (when (< hour 24)
+              (cl-incf (aref hours hour) (- next cursor)))
+            (setq cursor next)))))
+    hours))
+
+(defun org-activity-chart-dir ()
+  "Directory engine chart SVGs are written to (beside the journal)."
+  (expand-file-name "charts" (org-activity-journal-dir)))
+
+(defun org-activity--svg-timeline (hours &optional title)
+  "Render HOURS (24 per-hour seconds) as an hour-of-day bar chart SVG.
+Pure string generation, in the same style as the android module's
+charts -- renderable by any SVG-capable Emacs or browser."
+  (let* ((hs (if (vectorp hours) (append hours nil) hours))
+         (colw 34) (barw 22) (fs 11)
+         (plot-h 130) (val-h 16) (top 26) (label-h 16)
+         (maxv (apply #'max 1 hs))
+         (w (+ 16 (* colw 24)))
+         (h (+ top val-h plot-h label-h))
+         (tc "#333333") (bc "#3a6ea5"))
+    (concat
+     (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\" font-family=\"sans-serif\" font-size=\"%d\">\n"
+             w h w h fs)
+     (format "<rect x=\"0\" y=\"0\" width=\"%d\" height=\"%d\" fill=\"#ffffff\"/>\n" w h)
+     (when title
+       (format "<text x=\"10\" y=\"16\" fill=\"%s\" font-weight=\"bold\">%s</text>\n"
+               tc (org-activity--xml-escape title)))
+     (let ((i 0) (out nil))
+       (dolist (secs hs)
+         (let* ((bh (max 1 (round (* (/ (float secs) maxv) plot-h))))
+                (bx (+ 8 (* i colw) (/ (- colw barw) 2)))
+                (by (+ top val-h (- plot-h bh)))
+                (cx (+ 8 (* i colw) (/ colw 2))))
+           (when (> secs 0)
+             (push (format "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"%s\" rx=\"2\"/>\n"
+                           bx by barw bh bc)
+                   out))
+           (when (= 0 (% i 3))
+             (push (format "<text x=\"%d\" y=\"%d\" text-anchor=\"middle\" fill=\"%s\">%02d</text>\n"
+                           cx (+ top val-h plot-h 14) tc i)
+                   out)))
+         (setq i (1+ i)))
+       (apply #'concat (nreverse out)))
+     "</svg>\n")))
+
+(defun org-activity--xml-escape (s)
+  "Escape S for safe inclusion in SVG text content."
+  (replace-regexp-in-string
+   "[&<>\"']"
+   (lambda (c)
+     (cdr (assq (aref c 0)
+                '((?& . "&amp;") (?< . "&lt;") (?> . "&gt;")
+                  (?\" . "&quot;") (?' . "&apos;")))))
+   s))
+
+(defun org-activity--write-timeline-chart (day)
+  "Write DAY's hourly timeline chart; return its link relative to the
+journal file, or nil when the day has no CLOCK data."
+  (let* ((hours (org-activity--hourly-from-events
+                 (org-activity--day-events day))))
+    (when (cl-some (lambda (s) (> s 0)) hours)
+      (let* ((dir (org-activity-chart-dir))
+             (file (expand-file-name (concat "timeline-" day ".svg") dir))
+             (svg (org-activity--svg-timeline hours
+                                             (format "Hour of day, %s" day))))
+        (make-directory dir t)
+        (with-temp-file file (insert svg))
+        (concat "charts/" (file-name-nondirectory file))))))
+
+;;;###autoload
+(defun org-activity-timeline (&optional day)
+  "Show DAY's (default today) hour-of-day usage as an SVG timeline."
+  (interactive)
+  (require 'org nil t)
+  (let* ((day (or day (org-activity-day-string)))
+         (link (org-activity--write-timeline-chart day))
+         (buffer (get-buffer-create "*Actlog Timeline*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (if (fboundp 'org-mode) (org-mode) (fundamental-mode))
+        (insert (format "#+title: Actlog timeline %s\n\n" day))
+        (if link
+            (insert (format "#+caption: Hour of day\n[[file:%s]]\n" link))
+          (insert "Nothing tracked on this day.\n"))
+        (goto-char (point-min)))
+      (display-buffer buffer)
+      (when (and (fboundp 'org-display-inline-images) (display-graphic-p))
+        (with-current-buffer buffer
+          (ignore-errors (org-display-inline-images t t)))))
+    buffer))
+
+;; ------------------------------------------------------------------------
+;; JSON export (ActivityWatch-style events; data freedom)
+;; ------------------------------------------------------------------------
+
+;;;###autoload
+(defun org-activity-export-json (&optional day file)
+  "Export DAY's (default today) sessions to FILE as event JSON.
+Each event carries timestamp (session start, ISO 8601), duration
+(seconds) and data ((app . KEY) (mode . MODE)) -- the shape
+ActivityWatch exports, so the data leaves as freely as it arrived."
+  (interactive)
+  (let* ((day (or day (org-activity-day-string)))
+         (file (or file (read-file-name "Export to: " nil nil nil
+                                        (concat day "-activity.json"))))
+         (events (org-activity--day-events day))
+         (json (json-encode
+                (mapcar
+                 (lambda (e)
+                   `((timestamp . ,(format-time-string
+                                    "%Y-%m-%dT%H:%M:%S%z"
+                                    (seconds-to-time (nth 2 e))))
+                     (duration . ,(- (nth 3 e) (nth 2 e)))
+                     (data . ((app . ,(nth 0 e))
+                              (mode . ,(or (nth 1 e) ""))))))
+                 events))))
+    (with-temp-file file (insert json))
+    (message "org-activity: %d event(s) exported to %s" (length events) file)
+    file))
+
 (defun org-activity--update-mode-line ()
   "Refresh the dynamic mode-line element."
   (setq org-activity--mode-line
@@ -480,6 +692,58 @@ property and a :LOGBOOK: drawer) on the first session of the day."
             (format " A:%s %s" org-activity--current-key
                     (org-activity--fmt-dur (org-activity--today-total)))
           " A:-")))
+
+;; ------------------------------------------------------------------------
+;; Categories, limits (report-time; the journal is never rewritten)
+;; ------------------------------------------------------------------------
+
+(defun org-activity--category-of (key)
+  "Category for KEY per `org-activity-categories', or \='Other\='."
+  (or (cl-loop for (name . regexps) in org-activity-categories
+               when (seq-some (lambda (re) (string-match-p re key)) regexps)
+               return name)
+      "Other"))
+
+(defun org-activity-category-table (totals)
+  "Render TOTALS (alist key->seconds) rolled up by category."
+  (let ((cats nil))
+    (pcase-dolist (`(,key . ,secs) totals)
+      (cl-incf (alist-get (org-activity--category-of key) cats 0 nil #'equal) secs))
+    (setq cats (cl-sort cats #'> :key #'cdr))
+    (concat "| Category | Time |\n"
+            "|-" (make-string 20 ?-) "+-" (make-string 8 ?-) "-|\n"
+            (mapconcat (lambda (kv)
+                         (format "| %s | %s |\n" (car kv)
+                                 (org-activity--fmt-dur (cdr kv))))
+                       cats)
+            "|-" (make-string 20 ?-) "+-" (make-string 8 ?-) "-|\n"
+            (format "| Total | %s |\n"
+                    (org-activity--fmt-dur
+                     (cl-reduce #'+ (mapcar #'cdr totals) :initial-value 0))))))
+
+(defun org-activity--over-limits (totals)
+  "Limits exceeded in TOTALS (alist key->seconds).
+Returns ((REGEX LIMIT-SECS ACTUAL-SECS)...): ACTUAL sums every key
+matching REGEX, so a limit can bound one activity or a whole family."
+  (cl-loop for (re . mins) in org-activity-limits
+           for limit = (* mins 60)
+           for actual = (cl-reduce #'+
+                                   (mapcar #'cdr
+                                           (cl-remove-if-not
+                                            (lambda (kv)
+                                              (string-match-p re (car kv)))
+                                            totals))
+                                   :initial-value 0)
+           when (> actual limit)
+           collect (list re limit actual)))
+
+(defun org-activity--check-limits ()
+  "Message about `org-activity-limits' exceeded today (informing only)."
+  (dolist (over (org-activity--over-limits org-activity--totals))
+    (message "org-activity: over limit: %s at %s (limit %s)"
+             (nth 0 over)
+             (org-activity--fmt-dur (nth 2 over))
+             (org-activity--fmt-dur (nth 1 over)))))
 
 ;; ------------------------------------------------------------------------
 ;; State persistence (Android kills processes without warning)
@@ -576,7 +840,10 @@ journal already holds its time."
 
 ;;;###autoload
 (defun org-activity-report (&optional day)
-  "Show a per-activity time table for DAY (default today) in Org."
+  "Show a per-activity time table for DAY (default today) in Org.
+With `org-activity-categories' set, a category rollup follows the
+main table; exceeded `org-activity-limits' are warned about; and the
+day's hour-of-day timeline chart is linked when CLOCK data exists."
   (interactive)
   (require 'org nil t)
   (let* ((day (or day (org-activity-day-string)))
@@ -590,6 +857,19 @@ journal already holds its time."
         (insert (if totals
                     (org-activity-summary-table totals)
                   "Nothing tracked yet.\n"))
+        (when (and totals org-activity-categories)
+          (insert "\n*By category*\n\n"
+                  (org-activity-category-table totals)))
+        (dolist (over (org-activity--over-limits totals))
+          (insert (format "WARNING: over limit: %s at %s (limit %s)\n"
+                          (nth 0 over)
+                          (org-activity--fmt-dur (nth 2 over))
+                          (org-activity--fmt-dur (nth 1 over)))))
+        (when-let* ((link (org-activity--write-timeline-chart day)))
+          (insert "\n#+caption: Hour of day\n[[file:" link "]]\n")
+          (when (fboundp 'org-display-inline-images)
+            (ignore-errors (org-display-inline-images nil t
+                                                      (point-min) (point-max)))))
         (goto-char (point-min)))
       (display-buffer buffer))
     buffer))

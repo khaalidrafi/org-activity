@@ -93,3 +93,42 @@ at personally.  Items are removed once reviewed.
    NEXT UNIT (Owner decision): build the emacs fork patch series +
    APK in CI per NATIVE-USAGE.org; then grant Usage Access on the
    phone and verify the first native pull.
+** DONE StayFree/ActivityWatch parity + Emacshell bridge (added 2026-11-22)
+   Owner order: "I want org-activity to be completely on par with
+   StayFree Android app and activitywatch. Patch the Emacshell app
+   if necessary for android."  This unit:
+   - Engine (org-activity.el): `org-activity-categories`
+     (ActivityWatch-style rules, report-time rollup — the journal is
+     never rewritten), `org-activity-limits` (StayFree-style goals,
+     informed in report + post-flush, never blocking), hourly
+     timeline from CLOCK lines (`org-activity--day-events` /
+     `--hourly-from-events` / `--svg-timeline`, `M-x
+     org-activity-timeline`, chart linked from the report), JSON
+     export (`org-activity-export-json`, ActivityWatch event shape).
+   - Android (org-activity-android.el): journal v2 — Notif column,
+     Unlocks line, #+name: hourly table (all idempotent-rewritten;
+     pre-v2 journals still parse via the 4-column fallback).
+     Emacshell bridge client (endpoint files at ~/emacshell-usage-{port,
+     secret}, one-line token-gated loopback protocol, never signals),
+     --pull-bridge (STATS rows + EVENTS-derived opens/notifs/unlocks/
+     hourly), --pull-auto order bridge → primitive → export files.
+     `org-activity-android-categories`, `org-activity-android-limits`
+     (+ refresh-time warnings, android-notifications-notify when the
+     port has it), `M-x org-activity-android-timeline`,
+     `M-x org-activity-android-export-json`.
+   - Emacshell app: EmacshellUsageServer.java (see that repo's
+     DESIGN.org "The usage bridge") — the "patch the app" half.
+   - Tests: 8 new engine tests + 13 new android tests; 5 existing
+     android tests updated for the (secs opens notifs) cell shape
+     and the 5-column table.  Offline paren/string balance checked
+     by scripts (scripts/check_org_activity.py in the session
+     sandbox); the REAL gate remains make compile + make test in CI
+     (no emacs binary here).
+   REVIEW HINTS: (1) --derive-day-extras closes an open session on
+   a new resume — sanity-check that against real queryEvents order;
+   (2) the bridge secret is per-boot — a stale Emacs holding an old
+   secret just gets {"error":"auth"} and the pull falls back, never
+   blocks; (3) journal v2 writes "Unlocks: N" only when the source
+   provided it — an import over a bridge-written day REPLACES the
+   section including the unlocks line (documented behavior:
+   last writer wins, same as before).

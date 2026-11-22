@@ -52,6 +52,13 @@
   "Return BUF's contents as a string."
   (with-current-buffer buf (buffer-string)))
 
+(defun org-activity-test--occurrences (needle haystack)
+  "Count non-overlapping NEEDLE occurrences in HAYSTACK."
+  (let ((n 0) (start 0))
+    (while (string-match needle haystack start)
+      (setq n (1+ n) start (match-end 0)))
+    n))
+
 ;;; ---------------------------------------------------------------------
 ;;; Activity identification
 ;;; ---------------------------------------------------------------------
@@ -362,6 +369,131 @@
        (should (string-match-p "^#\\+title: Actlog " (buffer-string)))
        (should (string-match-p "^| a | 0:01 |$" (buffer-string)))
        (should (string-match-p "^| Total | 0:01 |$" (buffer-string)))))))
+
+;;; ---------------------------------------------------------------------
+;;; Categories, limits (StayFree/ActivityWatch parity)
+;;; ---------------------------------------------------------------------
+
+(ert-deftest org-activity-category-of-matches-in-order ()
+  (let ((org-activity-categories
+         '(("Comms" . ("telega\\|Emacs:Telega"))
+           ("Code" . ("-org$")))))
+    (should (equal (org-activity--category-of "telega-org") "Comms"))
+    (should (equal (org-activity--category-of "Emacs:Telega") "Comms"))
+    (should (equal (org-activity--category-of "lark-org") "Code"))
+    ;; Nothing matched: the honest bucket.
+    (should (equal (org-activity--category-of "Files:downloads") "Other"))))
+
+(ert-deftest org-activity-category-table-rolls-up ()
+  (let ((org-activity-categories
+         '(("Comms" . ("telega\\|Telega")))))
+    (let ((table (org-activity-category-table
+                  '(("telega-org" . 3600.0)
+                    ("Emacs:Telega" . 600.0)
+                    ("Files:downloads" . 60.0)))))
+      (should (string-match-p "^| Category | Time |$" table))
+      ;; Comms bucket: 3600 + 600 = 1:10, sorted before Other.
+      (should (string-match-p "^| Comms | 1:10 |$" table))
+      (should (string-match-p "^| Other | 0:01 |$" table))
+      (should (string-match-p "^| Total | 1:11 |$" table))
+      (should (< (string-match "Comms" table)
+                 (string-match "Other" table))))))
+
+(ert-deftest org-activity-over-limits-sums-matching-keys ()
+  (let ((org-activity-limits
+         '(("telega\\|Telega" . 60) ("^b$" . 30))))
+    (should (equal (org-activity--over-limits
+                    '(("telega-org" . 3600.0) ("Emacs:Telega" . 600.0)))
+                   '(("telega\\|Telega" 3600 4200.0))))
+    ;; Under the limit: nothing.
+    (should (null (org-activity--over-limits
+                   '(("telega-org" . 60.0) ("b" . 1800.0)))))))
+
+;;; ---------------------------------------------------------------------
+;;; Hourly timeline
+;;; ---------------------------------------------------------------------
+
+(ert-deftest org-activity-day-events-and-hourly-buckets ()
+  (org-activity-test--env
+   ;; One session 11:20 -> 12:40: 40 min in hour 11, 40 min in hour 12.
+   (let ((start (org-activity-test--secs 0 20 11 7 11 2026)))
+     (org-activity--journal-clock "2026-11-07" "a" "m" start (+ start 4800.0))
+     (let ((events (org-activity--day-events "2026-11-07")))
+       (should (= (length events) 1))
+       (should (equal (nth 0 events) '("a" "m")))
+       (let ((hours (org-activity--hourly-from-events events)))
+         (should (= (aref hours 11) 2400.0))
+         (should (= (aref hours 12) 2400.0))
+         (should (= (aref hours 10) 0.0)))))))
+
+(ert-deftest org-activity-svg-timeline-renders-24-hours ()
+  (let ((hours (make-list 24 0.0)))
+    (setcar (nthcdr 9 hours) 1800.0)
+    (setcar (nthcdr 14 hours) 600.0)
+    (let ((svg (org-activity--svg-timeline hours "Hour of day, X")))
+      (should (string-match-p "<svg" svg))
+      ;; background + the two nonzero bars
+      (should (= (org-activity-test--occurrences "<rect" svg) 3))
+      (should (string-match-p "Hour of day, X" svg))
+      ;; hour labels every 3rd hour
+      (should (string-match-p ">00<" svg))
+      (should (string-match-p ">21<" svg)))))
+
+(ert-deftest org-activity-write-timeline-chart-and-timeline-buffer ()
+  (org-activity-test--env
+   (let ((start (org-activity-test--secs 0 20 11 7 11 2026)))
+     (org-activity--journal-clock "2026-11-07" "a" "m" start (+ start 300.0))
+     (let ((link (org-activity--write-timeline-chart "2026-11-07")))
+       (should (equal link "charts/timeline-2026-11-07.svg"))
+       (should (file-exists-p
+                (expand-file-name link (org-activity-journal-dir)))))
+     ;; Empty day: no chart, no crash.
+     (should (null (org-activity--write-timeline-chart "1999-01-01")))
+     (let ((buf (org-activity-timeline "2026-11-07")))
+       (with-current-buffer buf
+         (should (string-match-p "timeline-2026-11-07\\.svg"
+                                 (buffer-string))))))))
+
+;;; ---------------------------------------------------------------------
+;;; JSON export
+;;; ---------------------------------------------------------------------
+
+(ert-deftest org-activity-export-json-shape ()
+  (org-activity-test--env
+   (let* ((start (org-activity-test--secs 0 20 11 7 11 2026))
+          (out (expand-file-name "export.json"
+                                 (file-name-directory
+                                  org-activity-state-file))))
+     (org-activity--journal-clock "2026-11-07" "a" "m" start (+ start 900.0))
+     (let ((file (org-activity-export-json "2026-11-07" out)))
+       (should (file-exists-p file))
+       (with-temp-buffer
+         (insert-file-contents file)
+         (let ((json (buffer-string)))
+           ;; One event, ActivityWatch's shape.
+           (should (string-match-p "\"timestamp\":\"2026-11-07T11:20:00" json))
+           (should (string-match-p "\"duration\":900" json))
+           (should (string-match-p "\"app\":\"a\"" json))
+           (should (string-match-p "\"mode\":\"m\"" json))))))))
+
+(ert-deftest org-activity-report-categories-and-limits-integrated ()
+  (org-activity-test--env
+   (let* ((org-activity-categories '(("Comms" . ("^a$"))))
+          (org-activity-limits '(("^a$" . 1)))  ; 1 minute
+          (start (org-activity-test--secs 0 20 11 7 11 2026))
+          (buf (progn
+                 (org-activity--journal-clock "2026-11-07" "a" "m"
+                                        start (+ start 120.0))
+                 (org-activity-report "2026-11-07"))))
+     (with-current-buffer buf
+       (should (string-match-p "^\\*By category\\*" (buffer-string)))
+       (should (string-match-p "^| Comms | 0:02 |$" (buffer-string)))
+       ;; 120 s against a 60 s limit: warned.
+       (should (string-match-p "WARNING: over limit: \\^a\\$ at 0:02 (limit 0:01)"
+                               (buffer-string)))
+       ;; timeline chart linked
+       (should (string-match-p "timeline-2026-11-07\\.svg"
+                               (buffer-string)))))))
 
 (provide 'org-activity-test)
 ;;; test.el ends here

@@ -139,10 +139,12 @@ org.gnu.emacs,90000
          (days (org-activity-android--aggregate rows))
          (d05 (cdr (assoc org-activity-android-test--day-a days))))
     (should (= (length days) 2))
-    (should (= (car (cdr (assoc "org.whatsapp" d05))) 3600))
-    (should (= (cdr (cdr (assoc "org.whatsapp" d05))) 12))
+    (should (= (nth 1 (assoc "org.whatsapp" d05)) 3600))
+    (should (= (nth 2 (assoc "org.whatsapp" d05)) 12))
+    ;; notifications absent from the CSV: honest 0
+    (should (= (nth 3 (assoc "org.whatsapp" d05)) 0))
     (should (equal (cdr (assoc "label:org.whatsapp" d05)) "WhatsApp"))
-    (should (= (car (cdr (assoc "org.gnu.emacs" d05))) 7200))))
+    (should (= (nth 1 (assoc "org.gnu.emacs" d05)) 7200))))
 
 (ert-deftest org-activity-android--aggregate-longest-label-wins ()
   (let ((days (org-activity-android--aggregate
@@ -167,13 +169,13 @@ org.gnu.emacs,90000
 (ert-deftest org-activity-android--day-table-sorted-with-total ()
   (let ((table (org-activity-android--day-table
                 (list (cons "label:org.a" "App A")
-                      (cons "org.a" (cons 60 1))
-                      (cons "org.b" (cons 3600 2))))))
-    (should (string-match-p "| App A | org\\.a | 0:01 | 1 |" table))
-    (should (string-match-p "| org\\.b | org\\.b | 1:00 | 2 |" table))
+                      (cons "org.a" (list 60 1 4))
+                      (cons "org.b" (list 3600 2 20))))))
+    (should (string-match-p "| App A | org\\.a | 0:01 | 1 | 4 |" table))
+    (should (string-match-p "| org\\.b | org\\.b | 1:00 | 2 | 20 |" table))
     ;; sorted descending: org.b row must appear before org.a row
     (should (< (string-match "org\\.b" table) (string-match "org\\.a" table)))
-    (should (string-match-p "| Total | | 1:01 | 3 |" table))))
+    (should (string-match-p "| Total | | 1:01 | 3 | 24 |" table))))
 
 (ert-deftest org-activity-android--write-day-idempotent ()
   (org-activity-android-test--with-journal
@@ -193,7 +195,7 @@ org.gnu.emacs,90000
    (org-activity-android--write-day
     org-activity-android-test--day-a
     (list (list :day org-activity-android-test--day-a :package "org.x" :label "X"
-                :seconds 3660 :opens 3)))
+                :seconds 3660 :opens 3 :notifications 7)))
    (let ((days (org-activity-android--read-day-tables)))
      (should (= (length days) 1))
      (should (equal (car (car days)) org-activity-android-test--day-a))
@@ -201,7 +203,25 @@ org.gnu.emacs,90000
        (should (equal (nth 0 row) "X"))
        (should (equal (nth 1 row) "org.x"))
        (should (= (nth 2 row) 3660))
-       (should (= (nth 3 row) 3))))))
+       (should (= (nth 3 row) 3))
+       (should (= (nth 4 row) 7))))))
+
+(ert-deftest org-activity-android--read-day-tables-old-4col-parses ()
+  (org-activity-android-test--with-journal
+   ;; A journal written before the Notif column: still readable, notif 0.
+   (with-temp-file org-activity-android-org-file
+     (insert (concat "* " org-activity-android-test--day-a " Sat\n\n"
+                    "| App | Package | Time | Opens |\n"
+                    "|---+---+---+---|\n"
+                    "| X | org.x | 1:01 | 3 |\n"
+                    "| Total | | 1:01 | 3 |\n")))
+   (let ((days (org-activity-android--read-day-tables)))
+     (should (= (length days) 1))
+     (let ((row (cadr (car days))))
+       (should (equal (nth 1 row) "org.x"))
+       (should (= (nth 2 row) 3660))
+       (should (= (nth 3 row) 3))
+       (should (= (nth 4 row) 0))))))
 
 (ert-deftest org-activity-android--import-and-range ()
   (org-activity-android-test--with-journal
@@ -346,11 +366,11 @@ org.gnu.emacs,90000
 
 (ert-deftest org-activity-android--day-table-org ()
   (let ((table (org-activity-android--day-table-org
-                (list (list "A" "org.a" 60 1)
-                      (list "B" "org.b" 3660 2)))))
-    (should (string-match-p "| B | org\\.b | 1:01 | 2 |" table))
+                (list (list "A" "org.a" 60 1 2)
+                      (list "B" "org.b" 3660 2 9)))))
+    (should (string-match-p "| B | org\\.b | 1:01 | 2 | 9 |" table))
     (should (< (string-match "org\\.b" table) (string-match "org\\.a" table)))
-    (should (string-match-p "| Total | | 1:02 | 3 |" table))))
+    (should (string-match-p "| Total | | 1:02 | 3 | 11 |" table))))
 
 (ert-deftest org-activity-android--dblock-with-chart-inserts-links ()
   (org-activity-android-test--with-journal
@@ -524,7 +544,7 @@ org.gnu.emacs,90000
             (with-temp-buffer
               (insert-file-contents org-activity-android-org-file)
               (goto-char (point-min))
-              (should (search-forward "| Emacs | org.emacs | 0:10 | 0 |"
+              (should (search-forward "| Emacs | org.emacs | 0:10 | 0 | 0 |"
                                       nil t)))
             ;; re-pull is idempotent: the day heading is not duplicated
             (org-activity-android--pull-auto)
@@ -545,3 +565,238 @@ org.gnu.emacs,90000
        ;; stock sandbox: no primitive, not on android
        (should (equal (org-activity-android--pull-auto) '("fallback-day")))
        (should (= file-pulls 1))))))
+
+;; ------------------------------------------------------------------------
+;; Emacshell usage bridge (network layer stubbed at --bridge-request;
+;; the socket dance itself is thin and exercised on-device)
+;; ------------------------------------------------------------------------
+
+(ert-deftest org-activity-android--bridge-endpoint-parses-files ()
+  (let* ((dir (make-temp-file "au-bridge" t))
+         (org-activity-android-emacshell-port-file
+          (expand-file-name "port" dir))
+         (org-activity-android-emacshell-secret-file
+          (expand-file-name "secret" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file org-activity-android-emacshell-port-file
+            (insert "  4242\n"))
+          (with-temp-file org-activity-android-emacshell-secret-file
+            (insert "abc123\n"))
+          (should (org-activity-android-emacshell-p))
+          (should (equal (org-activity-android--bridge-endpoint)
+                         '(4242 . "abc123")))
+          ;; A rotten port file means no bridge, never an error.
+          (with-temp-file org-activity-android-emacshell-port-file
+            (insert "not-a-port"))
+          (should-not (org-activity-android-emacshell-p))
+          ;; Missing secret file: same.
+          (delete-file org-activity-android-emacshell-secret-file)
+          (should-not (org-activity-android--bridge-endpoint)))
+      (delete-directory dir t))))
+
+(defun org-activity-android-test--with-bridge (stub body-fn)
+  "Call BODY-FN with `org-activity-android--bridge-request' stubbed to STUB."
+  (cl-letf (((symbol-function #'org-activity-android--bridge-request)
+             stub))
+    (funcall body-fn)))
+
+(ert-deftest org-activity-android--bridge-day-rows-shape ()
+  (org-activity-android-test--with-bridge
+   (lambda (_cmd &rest _args)
+     '((granted . t)
+       (apps ((package . "org.emacs") (label . "Emacs")
+              (lastUsedMs . 1762300000000) (foregroundMs . 3600000))
+             ((package . "org.zero") (label . "Zero")
+              (lastUsedMs . 1762300000000) (foregroundMs . 0))
+             ((package . "org.silent") (foregroundMs . 60000)))))
+   (lambda ()
+     (let ((rows (org-activity-android--bridge-day-rows "2026-11-05")))
+       ;; fg=0 dropped; nil label falls back to the package.
+       (should (= (length rows) 2))
+       (should (equal (plist-get (nth 0 rows) :day) "2026-11-05"))
+       (should (equal (plist-get (nth 0 rows) :package) "org.emacs"))
+       (should (equal (plist-get (nth 0 rows) :label) "Emacs"))
+       (should (= (plist-get (nth 0 rows) :seconds) 3600))
+       (should (= (plist-get (nth 0 rows) :opens) 0))
+       (should (= (plist-get (nth 0 rows) :notifications) 0))
+       (should (equal (plist-get (nth 1 rows) :label) "org.silent"))))))
+
+(ert-deftest org-activity-android--bridge-day-rows-ungranted-nil ()
+  (org-activity-android-test--with-bridge
+   (lambda (_cmd &rest _args) (list (cons 'granted nil)))
+   (lambda ()
+     (should (null (org-activity-android--bridge-day-rows "2026-11-05")))
+     (should (null (org-activity-android--bridge-day-events "2026-11-05"))))))
+
+(ert-deftest org-activity-android--bridge-day-events-shape ()
+  (org-activity-android-test--with-bridge
+   (lambda (_cmd &rest _args)
+     '((granted . t)
+       (events ((package . "org.a") (type . "resume") (tsMs . 1000))
+               ((package . "org.a") (type . "pause") (tsMs . 61000))
+               ((type . "screen_on") (tsMs . 2000))
+               ((type . "keyguard_hidden") (tsMs . 3000))
+               ((package . "org.a") (type . "notification_seen") (tsMs . 4000)))))
+   (lambda ()
+     (let ((events (org-activity-android--bridge-day-events "2026-11-05")))
+       ;; mapcar keeps stream order; package-less system events
+       ;; carry a nil package.
+       (should (equal (nth 0 events) '("org.a" resume 1000)))
+       (should (equal (nth 2 events) '(nil screen_on 2000)))
+       (should (equal (nth 3 events) '(nil keyguard_hidden 3000)))))))
+
+(ert-deftest org-activity-android--derive-day-extras-counts ()
+  ;; begin = 0 ms; a well-formed event stream within [0, 86400000).
+  (let* ((extras (org-activity-android--derive-day-extras
+                  '((nil screen_on 0)
+                    (nil keyguard_hidden 1000)
+                    ("org.a" resume 2000)
+                    ("org.a" notification_seen 3000)
+                    ("org.a" notification_seen 5000)
+                    ("org.a" pause 62000)
+                    ("org.b" resume 70000)
+                    ("org.b" pause 130000)
+                    (nil screen_off 200000))
+                  0 86400000)))
+    ;; unlocks prefer keyguard_hidden when present
+    (should (= (plist-get extras :unlocks) 1))
+    ;; opens: org.a resumed once, org.b once
+    (should (= (cdr (assoc "org.a" (plist-get extras :opens))) 1))
+    (should (= (cdr (assoc "org.b" (plist-get extras :opens))) 1))
+    ;; notifications per package
+    (should (= (cdr (assoc "org.a" (plist-get extras :notifs))) 2))
+    (should (null (assoc "org.b" (plist-get extras :notifs))))
+    ;; hourly: org.a 2s->62s + org.b 70s->130s = 120 s in hour 0
+    (let ((hourly (plist-get extras :hourly)))
+      (should (= (length hourly) 24))
+      (should (= (nth 0 hourly) 120.0))
+      (should (= (nth 1 hourly) 0.0)))))
+
+(ert-deftest org-activity-android--derive-day-extras-closes-on-resume ()
+  ;; A stream that drops the pause before a new resume: the open
+  ;; session is closed at the resume timestamp, never lost silently.
+  (let* ((extras (org-activity-android--derive-day-extras
+                  '(("org.a" resume 0)
+                    ("org.b" resume 60000)
+                    ("org.b" pause 120000))
+                  0 86400000)))
+    (should (= (nth 0 (plist-get extras :hourly)) 120.0))))
+
+(ert-deftest org-activity-android--derive-day-extras-unlock-fallback ()
+  ;; No keyguard events (API < 30): screen_on counts as the unlock.
+  (let ((extras (org-activity-android--derive-day-extras
+                 '((nil screen_on 0) (nil screen_off 1000)
+                   (nil screen_on 5000))
+                 0 86400000)))
+    (should (= (plist-get extras :unlocks) 2))))
+
+(ert-deftest org-activity-android--pull-bridge-writes-extras ()
+  (org-activity-android-test--with-journal
+   (let ((org-activity-android-native-days 1))
+     (org-activity-android-test--with-bridge
+      (lambda (cmd &rest _args)
+        (if (equal cmd "STATS")
+            '((granted . t)
+              (apps ((package . "org.a") (label . "A")
+                     (foregroundMs . 3600000))))
+          '((granted . t)
+            (events ((nil keyguard_hidden 0)
+                     ("org.a" resume 1000)
+                     ("org.a" notification_seen 2000)
+                     ("org.a" pause 3600000))))))
+      (lambda ()
+        (should (equal (org-activity-android--pull-bridge)
+                       (list (org-activity-android--day-string))))
+        (with-temp-buffer
+          (insert-file-contents org-activity-android-org-file)
+          (let ((s (buffer-string)))
+            ;; opens + notifs from EVENTS land in the table
+            (should (string-match-p "^| A | org\\.a | 1:00 | 1 | 1 |$" s))
+            ;; unlocks summary line
+            (should (string-match-p "^Unlocks: 1$" s))
+            ;; hourly table: 59.9 min in hour 0 -> 59 whole minutes
+            (should (string-match-p "^|  0 |      59 |$" s))))
+        ;; idempotent re-pull: the day heading is not duplicated
+        (org-activity-android--pull-bridge)
+        (with-temp-buffer
+          (insert-file-contents org-activity-android-org-file)
+          (should (= (org-activity-android-test--occurrences
+                      "^\\* " (buffer-string))
+                     1))))))))
+
+(ert-deftest org-activity-android--pull-auto-prefers-bridge ()
+  (org-activity-android-test--with-journal
+   (let ((file-pulls 0))
+     (cl-letf (((symbol-function #'org-activity-android-emacshell-p)
+                (lambda () t))
+               ((symbol-function #'org-activity-android--pull-bridge)
+                (lambda () '("bridge-day")))
+               ((symbol-function #'org-activity-android--pull-latest-file)
+                (lambda () (cl-incf file-pulls) '("file-day"))))
+       (should (equal (org-activity-android--pull-auto) '("bridge-day")))
+       (should (= file-pulls 0))
+       ;; Bridge empty: fall through to files.
+       (cl-letf (((symbol-function #'org-activity-android--pull-bridge)
+                  (lambda () nil)))
+         (should (equal (org-activity-android--pull-auto) '("file-day")))
+         (should (= file-pulls 1)))))))
+
+;; ------------------------------------------------------------------------
+;; Limits and categories (StayFree goals / ActivityWatch rules)
+;; ------------------------------------------------------------------------
+
+(ert-deftest org-activity-android--over-limits-and-warn ()
+  (org-activity-android-test--with-journal
+   (let ((org-activity-android-limits '(("org\\.a" . 30) ("org\\.b" . 120))))
+     (cl-letf (((symbol-function #'org-activity-android--day-rows)
+                (lambda (day)
+                  (if (string= day "1999-01-01")
+                      nil
+                    (list (list "A" "org.a" 3600 5 1)
+                          (list "B" "org.b" 3600 1 0))))))
+       (should (equal (org-activity-android--over-limits "2026-11-05")
+                      '(("org\\.a" 1800 3600))))
+       ;; No rows for that day: no warning.
+       (should (null (org-activity-android--over-limits "1999-01-01")))))))
+
+(ert-deftest org-activity-android--category-table-rolls-up ()
+  (let ((org-activity-android-categories
+         '(("Comms" . ("whatsapp\\|telegram")))))
+    (cl-letf (((symbol-function #'org-activity-android--read-day-tables)
+               (lambda ()
+                 (list (cons org-activity-android-test--day-a
+                             (list (list "WhatsApp" "org.whatsapp" 3600 1 0)
+                                   (list "Emacs" "org.gnu.emacs" 60 1 0)))))))
+      (let ((table (org-activity-android--category-table 7)))
+        (should (string-match-p "^| Comms | 1:00 |$" table))
+        (should (string-match-p "^| Other | 0:01 |$" table))))))
+
+;; ------------------------------------------------------------------------
+;; JSON export
+;; ------------------------------------------------------------------------
+
+(ert-deftest org-activity-android--export-json-shape ()
+  (org-activity-android-test--with-journal
+   (let ((out (make-temp-file "au-export" nil ".json")))
+     (org-activity-android--write-day
+      org-activity-android-test--day-a
+      (list (list :day org-activity-android-test--day-a
+                  :package "org.x" :label "X"
+                  :seconds 60 :opens 2 :notifications 3)))
+     (unwind-protect
+         (progn
+           (org-activity-android-export-json 7 out)
+           (with-temp-buffer
+             (insert-file-contents out)
+             (let ((json (buffer-string)))
+               (should (string-match-p
+                        (concat "\"timestamp\":\""
+                                org-activity-android-test--day-a "T00:00:00\"")
+                        json))
+               (should (string-match-p "\"duration\":60" json))
+               (should (string-match-p "\"app\":\"X\"" json))
+               (should (string-match-p "\"package\":\"org\\.x\"" json))
+               (should (string-match-p "\"opens\":2" json))
+               (should (string-match-p "\"notifications\":3" json)))))
+       (delete-file out)))))
