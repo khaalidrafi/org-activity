@@ -544,10 +544,15 @@ it), and already-clean \\='YYYY-MM-DD HH:MM\\=' input unchanged."
            ((and key (looking-at "^:MODE: \\(.*\\)$"))
             (setq mode (match-string 1)))
            ((and key (looking-at "^CLOCK: \\[\\([^]]+\\)\\]--\\[\\([^]]+\\)\\]"))
-            (push (list key mode
-                        (org-activity--parse-ts (match-string 1))
-                        (org-activity--parse-ts (match-string 2)))
-                  out)))
+            ;; Save both timestamps BEFORE any parse call: parse-ts runs
+            ;; date-to-time internally, whose regexp work clobbers the
+            ;; buffer's match data (match-string 2 would read garbage).
+            (let ((ts1 (match-string 1))
+                  (ts2 (match-string 2)))
+              (push (list key mode
+                          (org-activity--parse-ts ts1)
+                          (org-activity--parse-ts ts2))
+                    out))))
           (forward-line 1))))
     (nreverse out)))
 

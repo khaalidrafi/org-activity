@@ -700,21 +700,30 @@ before the Notif column existed still parse (Notifs reads as 0)."
            ;; Current 5-column rows (App Package Time Opens Notif).
            ((and day (looking-at
                       "^| \\(.*?\\) | \\(.*?\\) | \\([0-9]+:[0-9][0-9]\\) | \\([0-9]+\\) | \\([0-9]+\\) |$"))
-            (let ((label (match-string 1)))
+            ;; Save every group BEFORE the hms parse: it runs string-match
+            ;; internally and would clobber the buffer's match data.
+            (let* ((label (match-string 1))
+                   (pkg (match-string 2))
+                   (hms (match-string 3))
+                   (opens (match-string 4))
+                   (notifs (match-string 5)))
               (unless (equal label "Total")
-                (push (list label (match-string 2)
-                            (org-activity-android--hms->secs (match-string 3))
-                            (string-to-number (match-string 4))
-                            (string-to-number (match-string 5)))
+                (push (list label pkg
+                            (org-activity-android--hms->secs hms)
+                            (string-to-number opens)
+                            (string-to-number notifs))
                       (alist-get day days nil nil #'equal)))))
            ;; Pre-Notif 4-column rows: Notifs reads as 0.
            ((and day (looking-at
                       "^| \\(.*?\\) | \\(.*?\\) | \\([0-9]+:[0-9][0-9]\\) | \\([0-9]+\\) |$"))
-            (let ((label (match-string 1)))
+            (let* ((label (match-string 1))
+                   (pkg (match-string 2))
+                   (hms (match-string 3))
+                   (opens (match-string 4)))
               (unless (equal label "Total")
-                (push (list label (match-string 2)
-                            (org-activity-android--hms->secs (match-string 3))
-                            (string-to-number (match-string 4))
+                (push (list label pkg
+                            (org-activity-android--hms->secs hms)
+                            (string-to-number opens)
                             0)
                       (alist-get day days nil nil #'equal))))))
           (forward-line 1))))
