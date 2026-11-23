@@ -3,11 +3,16 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: purcell/setup-emacs@master
+      # Emacs 31.1 built from the upstream GNU release tarball
+      # (no third-party binaries): .github/actions/setup-emacs-gnu.
+      - name: Set up Emacs 31.1 (upstream GNU tarball)
+        uses: ./.github/actions/setup-emacs-gnu
         with:
-          version: 30.1
+          version: "31.1"
+          sha256: "1da5790d9580c81932b5bf700633114468da7b3412d69faa767daebf974f4586"
       - name: Byte-compile (warnings are errors)
         run: make compile
       - name: ERT tests

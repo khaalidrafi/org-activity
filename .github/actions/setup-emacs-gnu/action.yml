@@ -1,0 +1,64 @@
+name: setup-emacs-gnu
+description: >-
+  Build Emacs from an upstream GNU release tarball (cache-first).
+  The tarball URL and sha256 come from the GNU release
+  announcement (lists.gnu.org emacs-devel); the checksum gate makes
+  the provenance verifiable on every cold build.
+inputs:
+  version:
+    description: Emacs release version (tarball stem, e.g. "31.1")
+    required: true
+    default: "31.1"
+  sha256:
+    description: sha256 of the .tar.xz from the GNU release announcement
+    required: true
+    default: "1da5790d9580c81932b5bf700633114468da7b3412d69faa767daebf974f4586"
+
+outputs:
+  emacs-path:
+    description: Absolute path of the emacs binary
+    value: ${{ steps.paths.outputs.emacs }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute install paths
+      id: paths
+      shell: bash
+      run: |
+        prefix="$HOME/.local/emacs-${{ inputs.version }}"
+        {
+          echo "prefix=$prefix"
+          echo "emacs=$prefix/bin/emacs"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Cache the installed Emacs prefix
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/emacs-${{ inputs.version }}
+        # Bump the -vN suffix when version, flags or the runner image
+        # change in a way that needs a rebuild.
+        key: emacs-gnu-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}-v1
+
+    - name: Build from the upstream GNU tarball
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -eux
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq libgnutls28-dev libncurses-dev
+        curl -fsSLO "https://ftpmirror.gnu.org/emacs/emacs-${{ inputs.version }}.tar.xz"
+        echo "${{ inputs.sha256 }}  emacs-${{ inputs.version }}.tar.xz" | sha256sum -c -
+        tar xf "emacs-${{ inputs.version }}.tar.xz"
+        cd "emacs-${{ inputs.version }}"
+        ./configure --prefix="${{ steps.paths.outputs.prefix }}" \
+          --with-x=no --with-modules=yes --with-gnutls=yes
+        make -j"$(nproc)" MAKEINFO=true
+        make install
+
+    - name: Put Emacs on PATH and report the version
+      shell: bash
+      run: |
+        echo "${{ steps.paths.outputs.prefix }}/bin" >> "$GITHUB_PATH"
+        "${{ steps.paths.outputs.emacs }}" --version | head -1

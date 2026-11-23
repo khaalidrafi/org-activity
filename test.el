@@ -74,8 +74,9 @@
        (let ((am (org-activity-emacs-source)))
          (should (equal (car am) "projX"))
          ;; MODE is the display name (mode-name), not the symbol.
-         ;; Emacs 30 renamed it to "ELisp".
-         (should (equal (cdr am) "ELisp")))
+         ;; The capitalization varies across Emacs versions (30 "ELisp",
+         ;; 31 "Elisp") -- compare case-insensitively.
+         (should (equal (downcase (cdr am)) "elisp")))
        (set-window-buffer (selected-window)
                           (get-buffer-create "*scratch*"))
        (kill-buffer buf)))))
@@ -352,7 +353,7 @@
        (set-window-buffer (selected-window) buf)
        (org-activity--tick)
        (should (equal org-activity--current-key "tickproj"))
-       (should (equal org-activity--current-mode "ELisp"))
+       (should (equal (downcase org-activity--current-mode) "elisp"))
        (kill-buffer buf)))))
 
 (ert-deftest org-activity-report-renders-today-table ()
