@@ -132,3 +132,37 @@ at personally.  Items are removed once reviewed.
    provided it — an import over a bridge-written day REPLACES the
    section including the unlocks line (documented behavior:
    last writer wins, same as before).
+** DONE elwidget home-screen widgets (added 2026-11-23)
+   Owner order: "Org-activity should also have widgets."  Unit:
+   - org-activity-widget.el (new module): two specs for the elwidget
+     widget maker.  `org-activity` (4x2): today's total, top
+     activities as proportional :progress bars (relative to the
+     day's longest activity), StayFree-style over-limit lines,
+     Report/Journal buttons.  `org-activity-timeline` (4x3): eight
+     3-hour buckets + Chart/Report buttons.  All numbers come from
+     the engine's own parsers (`--parse-day` / `--day-events` /
+     `--hourly-from-events`) plus the running session's unflushed
+     seconds; buttons call the engine's own commands — same reuse
+     law as elwidget-org's built-ins.
+   - elwidget is a SOFT require: the module byte-compiles and tests
+     green without it (Package-Requires does not list it), and
+     `org-activity-widget-register` signals only when elwidget is
+     genuinely not loadable.  Enable:
+     `(with-eval-after-load 'elwidget (org-activity-widget-register))`.
+   - test-widget.el (new suite, 8 tests): day-seconds journal+live
+     math, render shape (time-ranked rows, proportional max, empty
+     day), limit-warning line + color, 3-hour bucket math, timeline
+     render shape, on-event dispatch (cl-letf stubs on the engine
+     commands), register gating (skip-unless elwidget absent).
+   - Makefile/AGENTS/README updated (module list, parity table row
+     "Home-screen widgets: yes", new Widgets section).
+   GATES: no emacs binary in this sandbox — CI on GitHub is the gate
+   (byte-compile warnings-as-errors + ERT), same as the two units
+   above.  REVIEW HINTS: (1) limit warnings read the journal only —
+     the live session is limit-checked when it closes, same source
+     as `org-activity-report`; (2) the top-activity bars are
+     relative to the longest activity of the day (StayFree-style),
+     not to a configured goal — say the word if a goal-relative
+     variant is wanted; (3) bucket width is fixed at 3 h (8 rows fit
+     the 4x3 cell) — a `org-activity-widget-bucket-hours` defcustom
+     is the obvious extension if wanted.

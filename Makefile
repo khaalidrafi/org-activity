@@ -6,7 +6,8 @@ EMACS ?= emacs
 # distribution's site-lisp is still found (same law as actlog/lark-org).
 LOAD = -L .
 
-SRCS = org-activity.el org-activity-linux.el org-activity-android.el
+SRCS = org-activity.el org-activity-linux.el org-activity-android.el \
+  org-activity-widget.el
 
 all: compile
 
@@ -16,9 +17,10 @@ compile:
 
 test: compile
 	$(EMACS) --batch $(LOAD) -l test -l test-linux -l test-android \
-	  -f ert-run-tests-batch-and-exit
+	  -l test-widget -f ert-run-tests-batch-and-exit
 
 clean:
-	rm -f $(SRCS:.el=.elc) test.elc test-linux.elc test-android.elc
+	rm -f $(SRCS:.el=.elc) test.elc test-linux.elc test-android.elc \
+	  test-widget.elc
 
 .PHONY: all compile test clean

@@ -7,7 +7,7 @@ org-activity tracks where your time goes and journals it as plain
 Org files you own.  It is a cross-platform, Emacs-native alternative
 to ActivityWatch: the same package runs on a Linux desktop and on
 Android (org.gnu.emacs app or Termux), with no daemon, no database
-and no network.  Three modules, one story:
+and no network.  Four modules, one story:
 
 | Module                     | Covers                                    | Where          |
 |----------------------------+-------------------------------------------+----------------|
@@ -16,6 +16,7 @@ and no network.  Three modules, one story:
 |                            | Emacs) while you work elsewhere            |                |
 | =org-activity-android.el=  | device-wide per-app screen time from      | Android        |
 |                            | Android's Usage Access data                |                |
+| =org-activity-widget.el=   | home-screen widgets via elwidget          | Android        |
 
 Feature parity with StayFree and ActivityWatch, honestly:
 
@@ -29,6 +30,7 @@ Feature parity with StayFree and ActivityWatch, honestly:
 | Week/month ranges                | yes      | yes           | yes (:days N)                       |
 | Categories + rules               | —        | yes           | yes (report-time, journal untouched)|
 | Usage limits / goals             | yes      | yes           | yes (informs, never blocks)         |
+| Home-screen widgets              | yes      | —             | yes (elwidget module)               |
 | AFK detection                    | —        | yes           | yes (idle threshold)                |
 | Charts                           | yes      | yes           | yes (SVG, no external tools)        |
 | Export your data                 | CSV      | JSON          | Org itself + JSON export commands   |
@@ -180,6 +182,38 @@ per-app notification counts need NOTIFICATION_SEEN events (Android
 10+ / API 29), and "opens" are ACTIVITY_RESUMED event counts — the
 same signals StayFree itself reads.
 
+* Widgets: org-activity on the Android home screen
+
+[[https://github.com/khaalidrafi/elwidget][elwidget]] renders Elisp-defined
+widgets as real Android home-screen widgets (the emacshell app draws
+them; taps flow back into Emacs).  org-activity ships two specs:
+
+- =org-activity= (4x2) — today's tracked total, the top activities
+  as proportional bars, StayFree-style over-limit warnings, and
+  Report / Journal buttons.
+- =org-activity-timeline= (4x3) — the hour-of-day timeline as eight
+  3-hour buckets, with a Chart button that opens the SVG timeline.
+
+The numbers are the engine's own parsers over the day's journal
+(plus the running session's unflushed seconds); the buttons are the
+engine's own commands.  No reimplementation, no network.
+
+Enable after elwidget:
+
+#+begin_src emacs-lisp
+  (require 'org-activity-widget)
+  (with-eval-after-load 'elwidget
+    (org-activity-widget-register))
+#+end_src
+
+Then add an "Emacs Widget 4x2 / 4x3" on the home screen and pick
+=org-activity= / =org-activity-timeline=.  On Android 12+ every bar
+and button is its own tap target; on 9-11 the whole surface is a
+single open-Emacs tap (an elwidget platform limit, not ours).
+elwidget itself is not a hard dependency: without it the module
+still loads and tests green, and registering the widgets is the only
+step that needs it.
+
 * Install
 
 #+begin_src emacs-lisp
@@ -192,8 +226,9 @@ same signals StayFree itself reads.
     :config (org-activity-mode +1))
 #+end_src
 
-Requires Emacs 29.1+.  No other Elisp dependencies.  The Linux
-module wants =hyprctl= or =xdotool= only when enabled.
+Requires Emacs 29.1+.  No other Elisp dependencies (the widget
+module needs elwidget only when you register its widgets).  The
+Linux module wants =hyprctl= or =xdotool= only when enabled.
 
 * Provenance
 
